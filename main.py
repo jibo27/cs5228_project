@@ -5,6 +5,7 @@ from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
 import numpy as np
 from datetime import datetime
 import pickle
+import sklearn
 
 from xgboost import XGBRegressor
 from sklearn.metrics import accuracy_score
@@ -33,7 +34,7 @@ def parse(filename):
 #     for k, v in d.items():
 #         if k == 
 
-# nominal2value = {} 
+# attr2vec = {} 
 # This is a dictionary, where the key is the attribute name
 # Each element is also a dictionary, where the key is "value2idx" and "onehot_matrix"
 # value2idx is to map an attribute value to the index
@@ -47,79 +48,73 @@ def date2value(s):
     return value 
 
 attr_ignored = ['listing_id', 'title', 'description', 'features', 'accessories',
-                'model', 'original_reg_date', 'opc_scheme', 'category']
+                # 'model', 
+                'no_of_owners',  
+                # 'original_reg_date',
+                 'opc_scheme', 'category']
 # attr_ignored = ['listing_id', 'title', 'description', 'features',
 #                 'model', 'original_reg_date']
 
+
+def get_nominal_matrix(values):
+    s = set(values)
+    s.add('')
+    k = {}
+    idx2value = list(s)
+    value2idx = {value:idx for idx, value in enumerate(idx2value)}
+    arr = np.asarray([[v] for v in idx2value])
+
+    encoder = OneHotEncoder(sparse=False)
+    onehot_matrix = encoder.fit_transform(arr)
+
+    value2vec = {value:onehot_matrix[idx] for value, idx in value2idx.items()}
+    return value2vec
+
+
 def analyze_attribute(data):
     attrs = list(data[0].keys())
-    nominal2value = {}
+    attr2vec = {}
+    data_cleaned  =[]
     for key in attrs:
         if key in attr_ignored:
             continue
         if key == 'price':
-            nominal2value[key] = {}
-            nominal2value[key]['value2vec'] = lambda x: float(x.strip())
+            attr2vec[key] = {}
+            attr2vec[key] = lambda x: float(x.strip())
 
         set_attr = set()
         for elm in data:
+            # Special consideration for some keys...
+            if key == 'make' and elm[key] == '':
+                elm[key] = elm['title'].split(' ')[0].lower()
+                # print('add %s'%elm[key]
+            if key == 'original_reg_date' and elm[key] == '':
+                elm['original_reg_date'] = elm['reg_date']
+
+
+
             # if key in ['original_reg_date', 'reg_date', 'lifespan' ]:
-            if key in ['reg_date', 'lifespan' ]:
-                nominal2value[key] = {}
-                nominal2value[key]['value2vec'] = date2value
+            if key in ['reg_date', 'lifespan', 'original_reg_date']:
+                attr2vec[key] = date2value
             elif key in ['curb_weight', 'power', 'engine_cap', \
                          'depreciation', 'coe', 'road_tax', \
                          'dereg_value', 'mileage', 'omv', \
                          'arf']: # ratio
-                nominal2value[key] = {}
-                nominal2value[key]['value2vec'] = lambda x: float(x.strip()) if len(x.strip()) != 0 else -1
+                attr2vec[key] = lambda x: float(x.strip()) if len(x.strip()) != 0 else -1
             else:
                 value = elm[key].strip()
-                set_attr.add(value)
-        if key in ['category', 'accessories']:
-            print()
-            set_attr.add('') # For unseen data
-            list_attr = [a1.split(',') for a1 in set_attr]
-            set_attr = set()
-            for a1 in list_attr:
-                for aa1 in a1:
-                    set_attr.add(aa1)
-            print('real set_attr for category:', len(set_attr))
-            nominal2value[key] = {}
-            nominal2value[key]['idx2value'] = list(set_attr)
-            nominal2value[key]['value2idx'] = {value:idx for idx, value in enumerate(nominal2value[key]['idx2value'])}
-            arr = np.asarray([[v] for v in nominal2value[key]['idx2value']])
-            encoder = OneHotEncoder(sparse=False)
-            nominal2value[key]['onehot_matrix'] = encoder.fit_transform(arr)
-            nominal2value[key]['value2vec'] = {value:nominal2value[key]['onehot_matrix'][idx] for value, idx in nominal2value[key]['value2idx'].items()}
+                set_attr.add(value.lower())
+        if 0 < len(set_attr) < 700: # If one attribute only has a small number of value set, we index them
+            attr2vec[key] = get_nominal_matrix(set_attr)
             print('%s is added as a nominal, whose size is %d'%(key, len(set_attr)))
-
-        elif 0 < len(set_attr) < 300: # If one attribute only has a small number of value set, we index them
-            # if key not in nominal2value:
-                # nominal2value[key] = {}
-            set_attr.add('') # For unseen data
-            nominal2value[key] = {}
-            nominal2value[key]['idx2value'] = list(set_attr)
-            nominal2value[key]['value2idx'] = {value:idx for idx, value in enumerate(nominal2value[key]['idx2value'])}
-            arr = np.asarray([[v] for v in nominal2value[key]['idx2value']])
-            encoder = OneHotEncoder(sparse=False)
-            nominal2value[key]['onehot_matrix'] = encoder.fit_transform(arr)
-            nominal2value[key]['value2vec'] = {value:nominal2value[key]['onehot_matrix'][idx] for value, idx in nominal2value[key]['value2idx'].items()}
-            print('%s is added as a nominal, whose size is %d'%(key, len(set_attr)))
-        elif key in nominal2value:
+        elif key in attr2vec:
             print('Attribute "%s" is added as a function'%(key))
         else:
-            print('Attribute "%s" needs care... The size is %d.'%(key, len(set_attr)))
-            print('Example value:')
-            for _ in range(5):
-                print(data[_][key])
+            print(key, len(set_attr))
             raise ValueError
-        # print(nominal2value[key])
-        # print(nominal2value)
-        # assert False
-    return attrs, nominal2value
+    return attrs, attr2vec
 
-def get_vector(d, nominal2value, attrs, has_label):
+def get_vector(d, attr2vec, attrs, has_label):
     """
         attrs is a list of attributes excluding the price. It is used to order the vector
     """
@@ -130,21 +125,24 @@ def get_vector(d, nominal2value, attrs, has_label):
         if attr in attr_ignored:
             continue
         value = d[attr]
-        # if attr in ['category', 'accessories']:
-        if attr in ['category']:
-            vecs = []
-            for v in value.split(','):
-                if v not in nominal2value[attr]['value2vec']: # This value is unseen value for that attribute
-                    v = ''
-                vec = nominal2value[attr]['value2vec'][v]
-                vecs.append(vec)
-            vec = sum(vecs)
-        elif isinstance(nominal2value[attr]['value2vec'], dict):
-            if value not in nominal2value[attr]['value2vec']: # This value is unseen value for that attribute
-                value = ''
-            vec = nominal2value[attr]['value2vec'][value]
-        else:
-            vec = nominal2value[attr]['value2vec'](value)
+
+        # Special consideration
+        if attr == 'make' and value == '':
+            value = d['title'].split(' ')[0].lower()
+        if attr == 'original_reg_date' and value == '':
+            value = d['reg_date']
+
+
+        
+        
+        if attr in attr2vec:
+
+            if hasattr(attr2vec[attr], 'shape') or isinstance(attr2vec[attr], dict): # 2 ways of indexing...
+                if value not in attr2vec[attr]:
+                    value = ''
+                vec = attr2vec[attr][value]
+            else:
+                vec = attr2vec[attr](value)
         if vec is None:
             print(attr, value)
 
@@ -154,24 +152,20 @@ def get_vector(d, nominal2value, attrs, has_label):
             vector += [vec]
     return vector
 
-
-
-def build_vectors(data, nominal2value, attrs, has_label=True):
+def build_vectors(data, attr2vec, attrs, has_label=True):
     vectors = []
     for idx, elm in enumerate(data):
-        vector = get_vector(elm, nominal2value, attrs, has_label)
+        vector = get_vector(elm, attr2vec, attrs, has_label)
         vectors.append(vector)
     return np.float32(vectors)
-
-
 
 data_train = parse('data/train.csv')
 
 print(data_train[0].keys())
 
-attrs, nominal2value = analyze_attribute(data_train)
+attrs, attr2vec = analyze_attribute(data_train)
 
-data_train = build_vectors(data_train, nominal2value, attrs)
+data_train = build_vectors(data_train, attr2vec, attrs)
 print(data_train.shape)
 
 print()
@@ -179,16 +173,15 @@ X = data_train[:, :-1]
 y = data_train[:, -1]
 
 
-
 # Cross-Validation
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
-other_params ={"n_estimators": 600, "max_depth": 4, "min_child_weight": 4, "colsample_bytree": 0.7}
+other_params ={"n_estimators": 400, "max_depth": 20, "min_child_weight": 2, "colsample_bytree": 0.5}
 learning_rate = 0.09
 model = XGBRegressor(**other_params, learning_rate=learning_rate)
 print(model)
-model.fit(X_train, y_train)
-# model.fit(X, y)
+# model.fit(X_train, y_train)
+model.fit(X, y)
 
 def write_to_csvfile(predicted, filename):
     with open(filename, 'w', newline='') as csvfile:
@@ -202,15 +195,15 @@ def write_to_csvfile(predicted, filename):
 
 # validate on the validation set
 y_pred_test = model.predict(X_test)
-print('Accuracy on the trainset:', np.linalg.norm(y_pred_test - y_test))
+# print('Accuracy on the trainset:', np.linalg.norm(y_pred_test - y_test))
+print('Accuracy on the cross validation set:', np.linalg.norm(y_test - y_pred_test))
 write_to_csvfile(y_pred_test, 'results/predicted_valid.csv')
-
 
 
 # Evaluting...
 data_test = parse('data/test.csv')
 print(data_test[0].keys())
-data_test = build_vectors(data_test, nominal2value, attrs, has_label=False)
+data_test = build_vectors(data_test, attr2vec, attrs, has_label=False)
 print(data_test.shape)
 y_pred = model.predict(data_test)
 
@@ -235,6 +228,15 @@ write_to_csvfile(y_pred, 'results/submission.csv')
 # 1512780.6, lr=0.09, max_depth=4, min_child_weight=3, colsample_bytree=0.7, year only
 # 1508084.4, lr=0.09, max_depth=4, min_child_weight=3, colsample_bytree=0.7, year only, n_estimators=600
 # 1491240.9, lr=0.09, max_depth=4, min_child_weight=4, colsample_bytree=0.7, year only, n_estimators=600
+
+# 1689351.2
+# 1641527.0, + model
+# 1652119.2, + model, make
+# 1616170.6, + model, make, original_reg_date <- reg_date
+# 1401088.0, + model, make, original_reg_date <- reg_date, - no_of_owners - indicative_price
+# 1407625.9, + model, make, original_reg_date <- reg_date, - no_of_owners - indicative_price - eco_categor
+
+# 1398496.2, + model, make, original_reg_date <- reg_date, - no_of_owners
 
 # 1944438.9 # lr=0.05
 # 2106857.5 # lr=0.01
