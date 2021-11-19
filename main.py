@@ -29,27 +29,18 @@ def parse(filename):
 
     return data
 
-# def get_vector(d):
-#     vector = []
-#     for k, v in d.items():
-#         if k == 
-
-# attr2vec = {} 
-# This is a dictionary, where the key is the attribute name
-# Each element is also a dictionary, where the key is "value2idx" and "onehot_matrix"
-# value2idx is to map an attribute value to the index
-# With the index from value2idx, we can use the onehot_matrix[idx] to get the corresponding vector for that value
 def date2value(s):
     if len(s) == 0:
         value = -1
     else:
-        # value = datetime.strptime(s, '%d-%b-%Y').toordinal()
-        value = int(s[-4:])
+        value = datetime.strptime(s, '%d-%b-%Y').toordinal()
+        # value = datetime.strptime('-'.join(s.split('-')[-2:]), '%b-%Y').toordinal()
+        # value = int(s[-4:])
     return value 
 
 attr_ignored = ['listing_id', 'title', 'description', 'features', 'accessories',
                 # 'model', 
-                'no_of_owners',  
+                'no_of_owners', 
                 # 'original_reg_date',
                  'opc_scheme', 'category']
 # attr_ignored = ['listing_id', 'title', 'description', 'features',
@@ -86,10 +77,15 @@ def analyze_attribute(data):
         for elm in data:
             # Special consideration for some keys...
             if key == 'make' and elm[key] == '':
+            # if key == 'make':
                 elm[key] = elm['title'].split(' ')[0].lower()
                 # print('add %s'%elm[key]
             if key == 'original_reg_date' and elm[key] == '':
                 elm['original_reg_date'] = elm['reg_date']
+            # if key == 'model':
+            #     elm[key] = elm['title'].split(' ')[1].lower()
+
+            
 
 
 
@@ -128,10 +124,13 @@ def get_vector(d, attr2vec, attrs, has_label):
 
         # Special consideration
         if attr == 'make' and value == '':
+        # if attr == 'make':
             value = d['title'].split(' ')[0].lower()
         if attr == 'original_reg_date' and value == '':
             value = d['reg_date']
 
+        # if attr == 'model':
+        #     value = d['title'].split(' ')[1].lower()
 
         
         
@@ -176,8 +175,33 @@ y = data_train[:, -1]
 # Cross-Validation
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
-other_params ={"n_estimators": 400, "max_depth": 20, "min_child_weight": 2, "colsample_bytree": 0.5}
-learning_rate = 0.09
+# 1229636.9,
+# other_params ={"n_estimators": 400, "max_depth": 20, "min_child_weight": 2, "colsample_bytree": 0.5}
+# learning_rate = 0.09
+
+# 1200229.8
+# other_params ={"n_estimators": 400, "max_depth": 20, "min_child_weight": 2, "colsample_bytree": 0.5}
+# learning_rate = 0.05
+
+
+
+# # 1199154.6
+other_params ={"n_estimators": 600, "max_depth": 20, "min_child_weight": 2, "colsample_bytree": 0.5}
+learning_rate = 0.05
+
+
+# # 1191758.5
+# other_params ={"n_estimators": 600, "max_depth": 30, "min_child_weight": 2, "colsample_bytree": 0.5}
+# learning_rate = 0.05
+
+
+# 1191596.0
+# other_params ={"n_estimators": 600, "max_depth": 10, "min_child_weight": 2, "colsample_bytree": 0.5}
+# learning_rate = 0.05
+
+#
+
+
 model = XGBRegressor(**other_params, learning_rate=learning_rate)
 print(model)
 # model.fit(X_train, y_train)
@@ -196,7 +220,8 @@ def write_to_csvfile(predicted, filename):
 # validate on the validation set
 y_pred_test = model.predict(X_test)
 # print('Accuracy on the trainset:', np.linalg.norm(y_pred_test - y_test))
-print('Accuracy on the cross validation set:', np.linalg.norm(y_test - y_pred_test))
+score_valid = np.linalg.norm(y_test - y_pred_test)
+print('Accuracy on the cross validation set:', score_valid)
 write_to_csvfile(y_pred_test, 'results/predicted_valid.csv')
 
 
@@ -208,7 +233,7 @@ print(data_test.shape)
 y_pred = model.predict(data_test)
 
 print('Mean of test set:', y_pred.mean())
-write_to_csvfile(y_pred, 'results/submission.csv')
+write_to_csvfile(y_pred, 'results/submission_valid_%d.csv'%int(score_valid))
 
 
 # 2493261.8
@@ -237,6 +262,7 @@ write_to_csvfile(y_pred, 'results/submission.csv')
 # 1407625.9, + model, make, original_reg_date <- reg_date, - no_of_owners - indicative_price - eco_categor
 
 # 1398496.2, + model, make, original_reg_date <- reg_date, - no_of_owners
+# 1229636.9, + model, make, original_reg_date <- reg_date, - no_of_owners, date to day
 
 # 1944438.9 # lr=0.05
 # 2106857.5 # lr=0.01
